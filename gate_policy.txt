@@ -1,0 +1,12 @@
+policy_version: 0.1
+
+FAIL if any Confirmed finding is Critical.
+FAIL if any Confirmed finding is High with confidence >= 0.75.
+
+NEEDS_HUMAN if:
+- High with confidence < 0.75, OR
+- Medium with confidence >= 0.75 and category in {AuthZ, AuthN, SSRF, Deserialization, Crypto, Secrets}
+
+NEEDS_HUMAN if any Inconclusive hypothesis in {AuthZ, AuthN, SSRF, Deserialization}.
+
+PASS otherwise, if fixes + must-add tests exist for all Medium+ findings.
