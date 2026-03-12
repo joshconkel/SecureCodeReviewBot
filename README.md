@@ -194,7 +194,7 @@ agents:
   gate:      { ... }
 ```
 
-The gate policy lives inside `agents.gate.user_template` and can be overridden at runtime with `--policy path/to/policy.txt`.
+The gate policy lives inside `agents.gate.user_template` and can be overridden at runtime with `--policy path/to/policy.txt`. For more information on what that file should contain and it's format, see the `gate_policy.md` help file.
 
 ---
 
