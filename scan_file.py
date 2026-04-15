@@ -29,6 +29,8 @@ Usage:
     python scan.py "C:\\AI\\WebGoat.NET\\WebGoat\\App_Code"
     python scan.py /path/to/code --config agents.yaml --out results --max-files 10
     python scan.py /path/to/code --file src/auth.py
+    python scan.py /path/to/code --pre-scan               # auto-run OWASP pre-scan on every file
+    python scan.py /path/to/code --file auth.py --pre-scan --prescan-file auth_prescan.json
 """
 
 from __future__ import annotations
@@ -71,12 +73,13 @@ SKIP_DIRS = {
 
 # Per-agent token minimums. The model will never be called with less than this.
 AGENT_MIN_TOKENS = {
-    "scope":       2500,
-    "threat":      2500,
-    "hypotheses":  3000,
-    "evidence":    3500,
-    "fix":         3000,
-    "gate":        2000,
+    "pre_scan":    10000,  # OWASP pass — needs room for findings + pipeline_handoff
+    "scope":       25000,
+    "threat":      25000,
+    "hypotheses":  30000,
+    "evidence":    55000,  # Raised: reasoning models burn tokens in <think>; slim inputs offset this
+    "fix":         55000,  # Raised: reasoning models consume 1000-3000 tok in <think> before JSON
+    "gate":        60000,  # Raised: gate re-reads policy verbatim in think block
 }
 
 # How many times to retry a single agent call on failure
@@ -127,13 +130,33 @@ def repair_json(text: str) -> str:
     return text.strip()
 
 
+def strip_think_blocks(text: str) -> str:
+    """
+    Remove <think>...</think> blocks emitted by reasoning models (Qwen3.5, QwQ, etc.)
+    before JSON extraction. Handles nested tags and partial blocks (model cut off mid-think).
+    """
+    # Remove complete <think>...</think> blocks (non-greedy, dotall)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove any unclosed <think> block that was truncated mid-generation
+    text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL | re.IGNORECASE)
+    return text.strip()
+
+
 def extract_json(raw: str) -> dict:
     """
     Try every strategy to extract a JSON object from model output.
+    Handles reasoning model think blocks, markdown fences, and malformed JSON.
     Returns the parsed dict, or raises ValueError with a clear message.
     """
     if not raw or not raw.strip():
         raise ValueError("Empty response from model")
+
+    # Strip <think>...</think> blocks first — reasoning models (Qwen3.5, QwQ, DeepSeek-R1)
+    # emit these before the actual JSON response. Must happen before any other processing.
+    raw = strip_think_blocks(raw)
+    if not raw.strip():
+        raise ValueError("Response contained only a think block — no JSON output produced. "
+                         "This is a thinking loop. Try increasing presence_penalty in agents.yaml.")
 
     candidates = []
 
@@ -231,6 +254,7 @@ def call_llm(
     user: str,
     max_tokens: int,
     temperature: float = 0.0,
+    presence_penalty: float = 0.0,
 ) -> tuple[str, str]:
     """
     Call the model. Returns (content, finish_reason).
@@ -244,6 +268,7 @@ def call_llm(
         ],
         temperature=temperature,
         max_tokens=max_tokens,
+        **({"presence_penalty": presence_penalty} if presence_penalty != 0.0 else {}),
     )
     choice = resp.choices[0]
     content = choice.message.content or ""
@@ -260,6 +285,7 @@ def call_agent(
     retries: int = DEFAULT_RETRIES,
     label: str = "agent",
     raw_out_path: Path | None = None,
+    presence_penalty: float = 0.0,
 ) -> dict:
     """
     Call one agent. Returns parsed JSON dict.
@@ -280,6 +306,7 @@ def call_agent(
     last_raw = ""
     last_err = ""
     effective_max_tokens = max(max_tokens, AGENT_MIN_TOKENS.get(label, 2000))
+    extra_params = {"presence_penalty": presence_penalty} if presence_penalty != 0.0 else {}
 
     for attempt in range(retries + 1):
         t_start = time.monotonic()
@@ -289,6 +316,7 @@ def call_agent(
                 messages=messages,
                 temperature=0.0,
                 max_tokens=effective_max_tokens,
+                **extra_params,
             )
             elapsed = time.monotonic() - t_start
             choice = resp.choices[0]
@@ -370,13 +398,21 @@ def call_agent(
 
             if should_retry:
                 if is_truncation:
+                    # CRITICAL: Do NOT append the truncated think-block output to the conversation.
+                    # Reasoning models (Qwen3.5) will interpret the truncated <think> content as a
+                    # prior assistant turn and spend the next attempt reasoning about how to compress
+                    # that truncated response — rather than solving the original task.
+                    # Instead: reset to original messages and ask for a shorter response upfront.
                     nudge = (
-                        "Your response was truncated. "
-                        "Produce a MUCH shorter JSON response. "
-                        "Maximum 2 items per array. "
-                        "Strings must be under 80 characters. "
-                        "Response MUST start with { and end with }."
+                        "Your previous response was cut off before completing the JSON. "
+                        "Skip any preamble or reasoning. "
+                        "Output ONLY a compact JSON object. "
+                        "Omit optional fields. Max 3 items per array. "
+                        "Strings under 100 characters. "
+                        "Start immediately with { and end with }."
                     )
+                    messages = [messages[0], messages[1]]  # reset to original system + user only
+                    messages.append({"role": "user", "content": nudge})
                 else:
                     nudge = (
                         f"Your previous response could not be parsed as JSON. Error: {err_str[:200]}. "
@@ -384,8 +420,8 @@ def call_agent(
                         "Start with { and end with }. "
                         "No markdown, no explanation, no text outside the JSON."
                     )
-                messages.append({"role": "assistant", "content": last_raw})
-                messages.append({"role": "user",      "content": nudge})
+                    messages.append({"role": "assistant", "content": last_raw})
+                    messages.append({"role": "user",      "content": nudge})
             else:
                 # No point continuing — break out of retry loop immediately
                 break
@@ -470,6 +506,28 @@ def file_to_numbered(rel_path: str, content: str) -> str:
     lines = content.splitlines()
     numbered = "\n".join(f"{i+1:>4}: {ln}" for i, ln in enumerate(lines))
     return f"FILE: {rel_path}\n{numbered}"
+
+
+def slim_hypotheses_for_evidence(hypotheses: dict) -> dict:
+    """
+    Strip fields the evidence agent doesn't need to reduce input token count.
+    Evidence only needs: id, title, category, where_to_check, evidence_needed,
+    severity_if_true, priority.
+    Removing why_likely, linked_threat_ids, linked_pre_scan_id cuts ~35% of tokens
+    and reduces how much the model re-reasons about threat model context.
+    """
+    slimmed = []
+    for h in hypotheses.get("hypotheses", []):
+        slimmed.append({
+            "id":               h.get("id"),
+            "title":            h.get("title"),
+            "category":         h.get("category"),
+            "where_to_check":   h.get("where_to_check", []),
+            "evidence_needed":  h.get("evidence_needed", []),
+            "severity_if_true": h.get("severity_if_true"),
+            "priority":         h.get("priority"),
+        })
+    return {"hypotheses": slimmed}
 
 
 def clamp(text: str, max_chars: int) -> str:
@@ -602,6 +660,60 @@ def build_report(
 
 
 # ---------------------------------------------------------------------------
+# Pre-scan runner (Stage 0)
+# ---------------------------------------------------------------------------
+
+def run_pre_scan(
+    client: OpenAI,
+    model: str,
+    agents: dict,
+    rel_path: str,
+    content: str,
+    max_chars: int,
+    max_tokens: int,
+    out_dir: Path,
+    presence_penalty: float = 0.0,
+) -> dict:
+    """
+    Run the OWASP pre-scan agent on a single file.
+    Returns parsed pre_scan_json dict (or {} on failure).
+    Only called when --pre-scan flag is set.
+    """
+    if "pre_scan" not in agents:
+        console.print("[yellow]  ⚠ pre_scan agent not defined in agents.yaml — skipping pre-scan[/yellow]")
+        return {}
+
+    # Cap content for pre-scan — it needs the whole file but not more than max_chars
+    excerpt = clamp(content, max_chars)
+
+    user_prompt = render(
+        agents["pre_scan"]["user_template"],
+        file_content=excerpt,
+    )
+
+    tok = max(max_tokens, AGENT_MIN_TOKENS.get("pre_scan", 40000))
+    result = call_agent(
+        client, model, agents["pre_scan"], user_prompt,
+        max_tokens=tok,
+        label="pre_scan",
+        raw_out_path=out_dir / "_pre_scan_raw.txt",
+        presence_penalty=presence_penalty,
+    )
+
+    # Stamp the scan target so downstream agents see the filename
+    if result and "meta" in result:
+        result["meta"]["scan_target"] = rel_path
+
+    (out_dir / "pre_scan.json").write_text(
+        json.dumps(result, indent=2), encoding="utf-8"
+    )
+
+    n = len(result.get("confirmed_findings", []))
+    console.print(f"    [dim]→ pre_scan ({n} finding(s))[/dim]")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Per-file pipeline
 # ---------------------------------------------------------------------------
 
@@ -619,6 +731,8 @@ def scan_file(
     policy_text: str,
     patterns_text: str,
     arch_text: str,
+    presence_penalty: float = 0.0,
+    pre_scan_result: dict | None = None,
 ) -> dict:
     """Run the full agent chain for one file. Returns summary dict."""
 
@@ -633,6 +747,7 @@ def scan_file(
             max_tokens=tok,
             label=name,
             raw_out_path=out_dir / f"_{name}_raw.txt",
+            presence_penalty=presence_penalty,
         )
         (out_dir / f"{name}.json").write_text(
             json.dumps(result, indent=2), encoding="utf-8"
@@ -658,7 +773,7 @@ def scan_file(
     threat_prompt = render(
         agents["threat"]["user_template"],
         scope_json=json.dumps(scope, indent=2),
-        pre_scan_json="{}",
+        pre_scan_json=json.dumps(pre_scan_result, indent=2) if pre_scan_result else "{}",
         arch_constraints=arch_text or "(none)",
     )
     threat = agent("threat", threat_prompt)
@@ -671,7 +786,7 @@ def scan_file(
         agents["hypotheses"]["user_template"],
         scope_json=json.dumps(scope, indent=2),
         threat_json=json.dumps(threat, indent=2),
-        pre_scan_json="{}",
+        pre_scan_json=json.dumps(pre_scan_result, indent=2) if pre_scan_result else "{}",
         csharp_notes="(use defaults from system prompt)",
         python_notes="(use defaults from system prompt)",
         ruby_notes="(use defaults from system prompt)",
@@ -683,11 +798,21 @@ def scan_file(
     # 4. EVIDENCE
     # ------------------------------------------------------------------
     console.print(f"    [dim]→ evidence[/dim]")
+
+    # Slim inputs to reduce think-block overhead on reasoning models.
+    # Evidence only needs the task-relevant fields from hypotheses — stripping
+    # why_likely, linked_threat_ids etc. cuts ~35% of input tokens.
+    # Cap the file excerpt tighter than max_chars: evidence needs to see the file
+    # but doesn't need 16K chars — 6K covers most files without blowing the context.
+    EVIDENCE_EXCERPT_CAP = 6000
+    evidence_excerpt = clamp(file_to_numbered(rel_path, content), EVIDENCE_EXCERPT_CAP)
+    slim_hyp = slim_hypotheses_for_evidence(hypotheses)
+
     ev_prompt = render(
         agents["evidence"]["user_template"],
-        hypotheses_json=json.dumps(hypotheses, indent=2),
-        fetched_context=excerpt,
-        pre_scan_json="{}",
+        hypotheses_json=json.dumps(slim_hyp, indent=2),
+        fetched_context=evidence_excerpt,
+        pre_scan_json=json.dumps(pre_scan_result, indent=2) if pre_scan_result else "{}",
     )
     evidence = agent("evidence", ev_prompt)
 
@@ -710,7 +835,7 @@ def scan_file(
         agents["gate"]["user_template"],
         evidence_json=json.dumps(evidence, indent=2),
         fixes_json=json.dumps(fixes, indent=2),
-        pre_scan_json="{}",
+        pre_scan_json=json.dumps(pre_scan_result, indent=2) if pre_scan_result else "{}",
         policy=policy_text or "(use default policy)",
     )
     gate = agent("gate", gate_prompt)
@@ -722,13 +847,15 @@ def scan_file(
     (out_dir / "report.md").write_text(report, encoding="utf-8")
 
     decision = gate.get("decision", "UNKNOWN")
-    n_findings = len(evidence.get("confirmed_findings_minimal", []))
+    n_findings  = len(evidence.get("confirmed_findings_minimal", []))
     n_blockers  = len(gate.get("blockers", []))
+    n_pre_scan  = len((pre_scan_result or {}).get("confirmed_findings", [])) if pre_scan_result is not None else 0
     return {
         "file":      rel_path,
         "decision":  decision,
         "findings":  n_findings,
         "blockers":  n_blockers,
+        "pre_scan":  n_pre_scan,
         "out_dir":   str(out_dir),
     }
 
@@ -790,13 +917,23 @@ def write_rollup(results: list[dict], out_root: Path) -> None:
         md.append("")
 
     md.append("## All Results")
-    md.append("| File | Decision | Findings | Blockers |")
-    md.append("|------|----------|----------|----------|")
-    for r in results:
-        md.append(
-            f"| {r['file']} | {r.get('decision','?')} | "
-            f"{r.get('findings',0)} | {r.get('blockers',0)} |"
-        )
+    has_prescan = any(r.get("pre_scan") is not None for r in results)
+    if has_prescan:
+        md.append("| File | Decision | Pre-scan | Findings | Blockers |")
+        md.append("|------|----------|----------|----------|----------|")
+        for r in results:
+            md.append(
+                f"| {r['file']} | {r.get('decision','?')} | "
+                f"{r.get('pre_scan', '-')} | {r.get('findings',0)} | {r.get('blockers',0)} |"
+            )
+    else:
+        md.append("| File | Decision | Findings | Blockers |")
+        md.append("|------|----------|----------|----------|")
+        for r in results:
+            md.append(
+                f"| {r['file']} | {r.get('decision','?')} | "
+                f"{r.get('findings',0)} | {r.get('blockers',0)} |"
+            )
     md.append("")
 
     (merged_dir / "report.md").write_text("\n".join(md), encoding="utf-8")
@@ -830,6 +967,22 @@ def main() -> None:
     ap.add_argument("--patterns",  default="",             help="Path to org patterns/standards text file")
     ap.add_argument("--arch",      default="",             help="Path to architecture constraints text file")
     ap.add_argument("--extensions",default="",             help="Comma-separated extra extensions to include (e.g. .jsx,.tsx)")
+    ap.add_argument(
+        "--pre-scan", action="store_true", default=False,
+        help=(
+            "Run the OWASP pre-scan agent on every file before the main pipeline. "
+            "Feeds PRE-### findings into threat, hypotheses, evidence, and gate agents. "
+            "Equivalent to the manual LMStudio pre-scan step but fully automated."
+        ),
+    )
+    ap.add_argument(
+        "--prescan-file", default="",
+        help=(
+            "Path to a pre-existing pre-scan JSON file to use instead of running --pre-scan. "
+            "Only applies when --file is also set (single-file mode). "
+            "Useful when you ran the manual LMStudio pre-scan and saved the output."
+        ),
+    )
     args = ap.parse_args()
 
     # ------------------------------------------------------------------
@@ -847,8 +1000,13 @@ def main() -> None:
     cfg["llm"].setdefault("base_url", "http://localhost:1234/v1")
     cfg["llm"].setdefault("api_key", "lm-studio")
     cfg["llm"].setdefault("per_request_timeout", 300)  # seconds per LLM call; raise for slow HW or large files
+    cfg["llm"].setdefault("presence_penalty", 0.0)     # set to 1.5 in agents.yaml for Qwen3.5 to reduce think loops
+
+    presence_penalty = float(cfg["llm"]["presence_penalty"])
 
     required_agents = {"scope", "threat", "hypotheses", "evidence", "fix", "gate"}
+    # Note: "pre_scan" is optional — only needed when --pre-scan is used.
+    # The run_pre_scan() function handles the missing-agent case gracefully.
     missing = required_agents - set(agents_cfg.keys())
     if missing:
         raise SystemExit(f"agents.yaml is missing agent definitions: {missing}")
@@ -879,6 +1037,19 @@ def main() -> None:
     patterns_text = Path(args.patterns).read_text(encoding="utf-8") if args.patterns and Path(args.patterns).exists() else ""
     arch_text     = Path(args.arch).read_text(encoding="utf-8")     if args.arch     and Path(args.arch).exists()     else ""
 
+    # --prescan-file: load a manually-produced pre-scan JSON for single-file mode
+    manual_prescan: dict | None = None
+    if args.prescan_file:
+        p = Path(args.prescan_file)
+        if p.exists():
+            try:
+                manual_prescan = json.loads(p.read_text(encoding="utf-8"))
+                console.print(f"[dim]Pre-scan file loaded: {p} ({len(manual_prescan.get('confirmed_findings', []))} finding(s))[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]⚠ Could not parse --prescan-file: {e} — ignoring[/yellow]")
+        else:
+            console.print(f"[yellow]⚠ --prescan-file not found: {p} — ignoring[/yellow]")
+
     # ------------------------------------------------------------------
     # LMStudio client
     # ------------------------------------------------------------------
@@ -900,12 +1071,15 @@ def main() -> None:
     # ------------------------------------------------------------------
     console.print(Panel(
         f"[bold cyan]Security Scanner[/bold cyan]\n"
-        f"Model:      {model}\n"
-        f"Root:       {scan_root}\n"
-        f"Files:      {len(targets)}\n"
-        f"Output:     {out_root.resolve()}\n"
-        f"Max tokens: {args.max_tokens} (per-agent floors: {AGENT_MIN_TOKENS})\n"
-        f"Max chars:  {args.max_chars}",
+        f"Model:            {model}\n"
+        f"Root:             {scan_root}\n"
+        f"Files:            {len(targets)}\n"
+        f"Output:           {out_root.resolve()}\n"
+        f"Max tokens:       {args.max_tokens} (per-agent floors: {AGENT_MIN_TOKENS})\n"
+        f"Max chars:        {args.max_chars}\n"
+        f"Presence penalty: {presence_penalty}\n"
+        f"Pre-scan:         {'enabled' if args.pre_scan else 'disabled (use --pre-scan to enable)'}"
+        + (" [yellow](Qwen3.5 think-loop mitigation active)[/yellow]" if presence_penalty > 0 else ""),
         title="scan.py",
     ))
 
@@ -934,6 +1108,28 @@ def main() -> None:
 
         t_file_start = time.monotonic()
         try:
+            # Determine pre_scan_result for this file:
+            # 1. --prescan-file always wins (single-file mode only)
+            # 2. --pre-scan runs the automated OWASP pass
+            # 3. Otherwise None (pipeline uses "{}" for all pre_scan_json inputs)
+            pre_scan_result: dict | None = None
+            if manual_prescan is not None:
+                # Manual file provided via --prescan-file
+                pre_scan_result = manual_prescan
+            elif args.pre_scan:
+                console.print(f"    [dim]→ pre_scan[/dim]")
+                pre_scan_result = run_pre_scan(
+                    client=client,
+                    model=model,
+                    agents=agents_cfg,
+                    rel_path=rel,
+                    content=content,
+                    max_chars=args.max_chars,
+                    max_tokens=args.max_tokens,
+                    out_dir=out_dir,
+                    presence_penalty=presence_penalty,
+                )
+
             result = scan_file(
                 client=client,
                 model=model,
@@ -948,16 +1144,23 @@ def main() -> None:
                 policy_text=policy_text,
                 patterns_text=patterns_text,
                 arch_text=arch_text,
+                presence_penalty=presence_penalty,
+                pre_scan_result=pre_scan_result,
             )
             elapsed_file = time.monotonic() - t_file_start
             results.append(result)
 
             decision = result.get("decision", "?")
             colour = {"PASS": "green", "FAIL": "red", "NEEDS_HUMAN": "yellow"}.get(decision, "white")
+            pre_scan_note = (
+                f" | pre-scan: {result.get('pre_scan', 0)} finding(s)"
+                if args.pre_scan or args.prescan_file else ""
+            )
             console.print(
                 f"  [{colour}]{decision}[/{colour}]  "
                 f"{result.get('findings', 0)} finding(s), "
-                f"{result.get('blockers', 0)} blocker(s)  "
+                f"{result.get('blockers', 0)} blocker(s)"
+                f"{pre_scan_note}  "
                 f"[dim]({elapsed_file:.0f}s)[/dim]  → {out_dir}"
             )
 
