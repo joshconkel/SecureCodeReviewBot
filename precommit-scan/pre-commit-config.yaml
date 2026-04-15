@@ -1,0 +1,161 @@
+# =============================================================================
+# .pre-commit-config.yaml
+# Drop this in the root of your repository.
+#
+# Setup (one-time, per developer machine):
+#   pip install pre-commit openai pyyaml rich
+#   pre-commit install
+#
+# The hook runs automatically on every `git commit`. It scans only the files
+# staged for the current commit — not the whole repo. Findings are printed as
+# warnings. The commit always proceeds regardless of findings (exit 0).
+#
+# To run manually against staged files:
+#   pre-commit run ai-security-scan
+#
+# To run against all files in the repo (first-time audit):
+#   pre-commit run ai-security-scan --all-files
+#
+# To skip the hook for one commit (e.g. WIP):
+#   git commit --no-verify
+#
+# To skip if LMStudio is not running (useful on machines without a local model):
+#   Set PRECOMMIT_SKIP_IF_OFFLINE=true in your shell profile.
+#
+# Environment variable overrides (set in shell profile or .env):
+#   PRECOMMIT_LLM_BASE_URL   — default: http://localhost:1234/v1
+#   PRECOMMIT_LLM_API_KEY    — default: lm-studio
+#   PRECOMMIT_LLM_MODEL      — default: first available model in LMStudio
+# =============================================================================
+
+repos:
+  - repo: local
+    hooks:
+      - id: ai-security-scan
+        name: AI Security Pre-Scan
+        language: python
+
+        # Path to the scanner script, relative to repo root.
+        # Adjust if you place the scanner in a subdirectory (e.g. security/).
+        entry: python precommit_scan.py
+
+        # Pass staged file paths as arguments.
+        # The script also reads staged content via `git show :<file>` directly,
+        # so it scans exactly what will be committed, not the working tree.
+        pass_filenames: false
+
+        # File types this hook should trigger on.
+        # pre-commit only runs the hook when at least one staged file matches.
+        # Keep this broad — the scanner does its own extension filtering.
+        types_or:
+          - python
+          - javascript
+          - ts
+          - c#
+          - ruby
+          - go
+          - java
+          - json
+          - yaml
+
+        # Also trigger on files pre-commit doesn't auto-classify by type
+        files: >-
+          (?x)^(
+            .*\.tf$|
+            .*\.tfvars$|
+            .*\.bicep$|
+            .*\.env$|
+            .*\.config$|
+            .*\.toml$|
+            .*\.csproj$|
+            requirements\.txt$|
+            Gemfile$|
+            Gemfile\.lock$|
+            package\.json$
+          )$
+
+        # Additional args passed to the scanner
+        args:
+          - --staged
+          # Uncomment to skip silently when LMStudio is not running:
+          # - --skip-if-offline
+          # Uncomment to write JSON results to disk:
+          # - --json-out=.security-scan-results.json
+
+        # Always exit 0 (warn-only). This is enforced in the script itself,
+        # but setting always_run: false and using verbose_on_success: false
+        # keeps the hook quiet when there are no staged files to scan.
+        verbose: true
+
+        # Dependencies installed automatically by pre-commit into its virtualenv
+        additional_dependencies:
+          - openai
+          - pyyaml
+          - rich
+
+---
+# =============================================================================
+# MANUAL SETUP INSTRUCTIONS (if not using the pre-commit framework)
+# =============================================================================
+#
+# Option A: Git hook directly (no pre-commit framework required)
+# -------------------------------------------------------------
+# 1. Copy precommit_scan.py and agents_precommit.yaml to your repo root
+#    (or a security/ subdirectory and update CONFIG_SEARCH_PATHS in the script)
+#
+# 2. Create .git/hooks/pre-commit:
+#
+#    #!/bin/sh
+#    python precommit_scan.py --staged --skip-if-offline
+#    exit 0   # always proceed — warn-only
+#
+# 3. Make it executable:
+#    chmod +x .git/hooks/pre-commit
+#
+# 4. Test it:
+#    git add some_file.py
+#    git commit -m "test"
+#
+# Option B: Manual scan before committing
+# ----------------------------------------
+#    python precommit_scan.py --staged
+#    python precommit_scan.py --files src/auth.py infra/main.tf
+#    python precommit_scan.py --dir src/
+#
+# Option C: VS Code / IDE integration
+# -------------------------------------
+# Add to .vscode/tasks.json:
+# {
+#   "label": "Security scan staged files",
+#   "type": "shell",
+#   "command": "python precommit_scan.py --staged",
+#   "group": "test",
+#   "presentation": { "reveal": "always", "panel": "shared" }
+# }
+#
+# =============================================================================
+# TEAM ROLLOUT NOTES
+# =============================================================================
+#
+# 1. START WITH --skip-if-offline
+#    Not every developer will have LMStudio running. Enable this flag in
+#    args above so the hook is a no-op when the model server is offline.
+#    This avoids forcing everyone to run a local model from day one.
+#
+# 2. TUNE min_confidence BEFORE ROLLOUT
+#    Run `python precommit_scan.py --dir src/ --verbose` across the codebase
+#    first. If findings are mostly false positives, raise min_confidence from
+#    0.75 to 0.85 in agents_precommit.yaml. The goal is < 1 false positive
+#    per developer per day.
+#
+# 3. COLLECT FEEDBACK
+#    Use --json-out to aggregate scan results across the team. Track:
+#    - False positive rate (how often developers ignore warnings)
+#    - True positive rate (findings that get fixed before push)
+#    - Scan time per file (should be < 30s on recommended hardware)
+#
+# 4. TEMPERATURE IS ALWAYS 0 — DO NOT CHANGE
+#    The scanner hardcodes temperature=0 in every LLM call. This ensures that
+#    a developer who sees a warning on one commit sees the same warning if they
+#    re-commit the same code. Non-zero temperature makes warnings appear and
+#    disappear non-deterministically, which destroys developer trust in the tool.
