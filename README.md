@@ -25,18 +25,6 @@ Every provider also accepts `--endpoint` to override the default API URL, and `-
 
 If you run into token limit issues in different APIs, modify the default AGENT_MIN_TOKENS values in the scan.py file to work within those limits. Sizes are appropriate for local models out of the box.
 
-e.g. for Open AI GPT 4o:
-
-AGENT_MIN_TOKENS = {
-    "pre_scan":   4000,
-    "scope":      6000,
-    "threat":     6000,
-    "hypotheses": 8000,
-    "evidence":   12000,
-    "fix":        12000,
-    "gate":       12000,
-}
-
 ### New companion scripts
 
 | Script | Purpose |
@@ -261,6 +249,18 @@ Even if `--max-tokens` is lower, each agent enforces a minimum generation budget
 | gate | 60,000 |
 
 If you see `Response truncated` errors on a specific agent, increase its floor in `scan.py` under `AGENT_MIN_TOKENS`.
+
+e.g. for Open AI GPT 4o:
+
+AGENT_MIN_TOKENS = {
+    "pre_scan":   4000,
+    "scope":      6000,
+    "threat":     6000,
+    "hypotheses": 8000,
+    "evidence":   12000,
+    "fix":        12000,
+    "gate":       12000,
+}
 
 ### Usage examples
 
