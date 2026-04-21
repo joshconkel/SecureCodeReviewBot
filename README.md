@@ -1,19 +1,47 @@
 # Local Agentic Code Security Scanner
 
-Use an agentic AI approach with JSON artifact pipelines to perform an initial secure code review. Build your gating criteria, start up an LM Studio instance with Qwen, and start doing first-pass reviews.
+Use an agentic AI approach with JSON artifact pipelines to perform an initial secure code review. Connect to a local LM Studio instance, a cloud provider, or any OpenAI-compatible endpoint, and start doing first-pass reviews.
 
 The pipeline scans a directory of source files, runs each file through a chain of specialized security agents (scope → threat model → hypotheses → evidence → fix → gate), and produces structured JSON artifacts and a Markdown report per file, plus a merged summary across all files.
+
+---
+
+## What's new
+
+### Multi-provider LLM backend support (`scan.py`)
+
+`scan.py` (previously `scan_file.py`) now supports six LLM backends selectable at runtime via a single CLI flag. LM Studio remains the default — no flags required for existing workflows.
+
+| Provider | Flag | Auth |
+|---|---|---|
+| LM Studio (default) | `--lmstudio` | None (local) |
+| OpenAI | `--openai` | `--api-key` or `OPENAI_API_KEY` |
+| Anthropic | `--anthropic` | `--api-key` or `ANTHROPIC_API_KEY` |
+| AWS Bedrock | `--bedrock` | Key flags, profile, or ambient credential chain |
+| Azure AI Foundry | `--azure` | `--api-key` or `AZURE_OPENAI_API_KEY` |
+| Google Gemini | `--gemini` | `--api-key` or `GEMINI_API_KEY` |
+
+Every provider also accepts `--endpoint` to override the default API URL, and `--model` to select a specific model. See [scan.py — full pipeline orchestrator](#scanpy--full-pipeline-orchestrator) for the complete flag reference.
+
+### New companion scripts
+
+| Script | Purpose |
+|---|---|
+| `parse_findings.py` | Walks a directory of scan output folders, consolidates findings across all scan sets, produces `findings_summary.txt` and `findings_jira.csv` |
+| `summary_to_csv.py` | Reads a `findings_summary.txt` file and exports a flat detailed CSV with one row per finding, including code excerpts, fix guidance, and test requirements |
+
+### Security hardening (`scan.py`)
+
+Eight vulnerability classes were identified via static analysis (Cortex / Qwen Coder review) and remediated. See [Security fixes](#security-fixes) for the full list.
 
 ---
 
 ## How it works
 
 ```
-[LMStudio Pre-scan]   →  pre_scan_json  (PRE-### findings, optional)
+[Pre-scan Agent]      →  pre_scan_json  (PRE-### findings, optional)
         ↓
 [Scope Agent]         →  entry points, auth boundaries, removed controls
-        ↓
-[Context Fetcher]     →  prioritized fetch plan for gap resolution
         ↓
 [Threat Model]        →  STRIDE threats, abuse cases, chained attacks
         ↓
@@ -26,7 +54,7 @@ The pipeline scans a directory of source files, runs each file through a chain o
 [Policy Gate]         →  PASS / NEEDS_HUMAN / FAIL decision
 ```
 
-Each agent receives only the data it needs — the pipeline deliberately slims payloads between stages to stay within local model context windows. All inter-agent data is written to disk as JSON so you can inspect, replay, or extend any stage independently.
+Each agent receives only the data it needs — the pipeline deliberately slims payloads between stages to stay within model context windows. All inter-agent data is written to disk as JSON so you can inspect, replay, or extend any stage independently.
 
 ---
 
@@ -36,10 +64,13 @@ Each agent receives only the data it needs — the pipeline deliberately slims p
 agents.yaml                  Full pipeline configuration — agent prompts, schemas, gate policy
 agents_quick.yaml            Configuration for the fast single-stage CI/CD scanner
 agents_precommit.yaml        Configuration for the local pre-commit hook scanner
-scan_file.py                 Main orchestrator — runs the full 7-stage pipeline over a directory
+scan.py                      Main orchestrator — runs the full 7-stage pipeline over a directory
+                             Supports LM Studio, OpenAI, Anthropic, Bedrock, Azure, Gemini
 quick_scan.py                Fast single-agent scanner designed for CI/CD pipeline gates
 precommit_scan.py            Warn-only pre-commit hook for local developer use
-parse_findings.py            Post-scan parser — consolidates results and exports reports
+parse_findings.py            Post-scan consolidator — walks scan output folders, produces
+                             findings_summary.txt and findings_jira.csv
+summary_to_csv.py            Reads findings_summary.txt and exports a detailed per-finding CSV
 lmstudio_system_prompt.txt   System prompt for the optional LMStudio pre-scan stage (Stage 0)
 ```
 
@@ -47,17 +78,28 @@ lmstudio_system_prompt.txt   System prompt for the optional LMStudio pre-scan st
 
 ## Requirements
 
-**Python**
+### Core (always required)
+
 ```bash
 pip install openai pyyaml rich
 ```
 
-**LMStudio**
+### Per-provider (install only the ones you use)
+
+```bash
+pip install anthropic           # --anthropic
+pip install boto3               # --bedrock
+pip install google-generativeai # --gemini
+# Azure and OpenAI use the openai package already installed above
+```
+
+### LM Studio (default backend)
+
 - Download from [lmstudio.ai](https://lmstudio.ai/)
 - Start the Local Server (default: `http://localhost:1234`)
 - Recommended model: **Qwen2.5-Coder-7B-Instruct Q4_K_M** (~4.7 GB download)
 
-**LMStudio server settings (critical)**
+**LM Studio server settings (critical)**
 
 | Setting | Value | Why |
 |---|---|---|
@@ -73,26 +115,105 @@ pip install openai pyyaml rich
 ## Quick start
 
 ```bash
-# Scan an entire directory
-python scan_file.py "C:\path\to\your\code"
+# LM Studio (default — no extra flags needed)
+python scan.py /path/to/code
 
-# Scan a single file
-python scan_file.py "C:\path\to\your\code" --file src/Auth.cs
+# OpenAI
+python scan.py /path/to/code --openai --api-key sk-...
 
-# Limit to first 10 files (good for testing)
-python scan_file.py "C:\path\to\your\code" --max-files 10
+# Anthropic
+python scan.py /path/to/code --anthropic --api-key sk-ant-...
 
-# Specify a different model (auto-detected from LMStudio if omitted)
-python scan_file.py "C:\path\to\your\code" --model qwen2.5-coder-7b-instruct
+# AWS Bedrock (ambient credentials)
+python scan.py /path/to/code --bedrock --aws-region us-east-1
+
+# Azure AI Foundry
+python scan.py /path/to/code --azure \
+    --endpoint https://my-resource.openai.azure.com \
+    --api-key <your-key> \
+    --azure-deployment gpt-4o
+
+# Google Gemini
+python scan.py /path/to/code --gemini --api-key AIza...
+
+# Scan a single file with any backend
+python scan.py /path/to/code --openai --api-key sk-... --file src/Auth.cs
+
+# Limit to first 10 files (useful for testing)
+python scan.py /path/to/code --max-files 10
+
+# Run OWASP pre-scan on every file, then full pipeline
+python scan.py /path/to/code --pre-scan
 ```
 
 ---
 
-## scan_file.py — Full pipeline orchestrator
+## scan.py — Full pipeline orchestrator
 
 Runs each file through all seven pipeline stages and writes a full artifact set per file.
 
-### CLI options
+### Provider selection flags
+
+Exactly one provider flag may be used per invocation. If none is given, `--lmstudio` is the default.
+
+| Flag | Provider | Default endpoint |
+|---|---|---|
+| `--lmstudio` | LM Studio local server | `http://localhost:1234/v1` |
+| `--openai` | OpenAI API | `https://api.openai.com/v1` |
+| `--anthropic` | Anthropic API (native SDK) | `https://api.anthropic.com` |
+| `--bedrock` | AWS Bedrock (boto3 converse) | Regional (e.g. `bedrock-runtime.us-east-1.amazonaws.com`) |
+| `--azure` | Azure AI Foundry | **Required via `--endpoint`** |
+| `--gemini` | Google Gemini (native SDK) | `https://generativelanguage.googleapis.com` |
+
+### Common endpoint and auth flags
+
+| Flag | Description |
+|---|---|
+| `--endpoint URL` | Override the provider's default API endpoint. Required for `--azure`. Credentials embedded in URLs (e.g. `user:secret@host`) are automatically redacted from log output. Only `http://` and `https://` schemes are accepted. |
+| `--api-key KEY` | API key for the selected provider. Falls back to the environment variable for that provider if omitted. |
+| `--model ID` | Model to use. If omitted, provider defaults apply (LM Studio auto-detects from server; others use a sensible default). |
+
+### AWS Bedrock flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--aws-region` | `us-east-1` | AWS region for the Bedrock runtime endpoint |
+| `--aws-profile` | | Named profile from `~/.aws/credentials` |
+| `--aws-access-key` | | Explicit AWS access key ID |
+| `--aws-secret-key` | | Explicit AWS secret access key |
+| `--aws-session-token` | | Session token for temporary credentials / assume-role |
+
+**Bedrock credential priority:** explicit key flags → `--aws-profile` → ambient chain (env vars, instance role, SSO).
+
+### Azure AI Foundry flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--azure-deployment` | *(same as `--model`)* | Azure deployment name when different from the model ID |
+| `--azure-api-version` | `2024-02-01` | Azure OpenAI API version string |
+
+### Environment variable fallbacks
+
+| Variable | Provider |
+|---|---|
+| `OPENAI_API_KEY` | `--openai` |
+| `ANTHROPIC_API_KEY` | `--anthropic` |
+| `AZURE_OPENAI_API_KEY` | `--azure` |
+| `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `--gemini` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | `--bedrock` (standard boto3 env vars) |
+
+### Provider default models
+
+| Provider | Default model |
+|---|---|
+| LM Studio | Auto-detected from server |
+| OpenAI | `gpt-4o` |
+| Anthropic | `claude-sonnet-4-5` |
+| Bedrock | `anthropic.claude-3-5-sonnet-20241022-v2:0` |
+| Azure | `gpt-4o` |
+| Gemini | `gemini-2.0-flash` |
+
+### Scanner options
 
 | Flag | Default | Description |
 |---|---|---|
@@ -100,7 +221,6 @@ Runs each file through all seven pipeline stages and writes a full artifact set 
 | `--file` | | Scan a single file instead of the whole directory |
 | `--config` | `agents.yaml` | Path to pipeline config |
 | `--out` | `scan_results` | Output directory for all artifacts |
-| `--model` | *(auto-detect)* | LMStudio model name |
 | `--max-files` | `50` | Max files to scan (0 = unlimited) |
 | `--max-chars` | `16000` | Max characters of file content sent per agent call |
 | `--max-tokens` | `3000` | Base generation budget (per-agent floors apply — see below) |
@@ -110,7 +230,7 @@ Runs each file through all seven pipeline stages and writes a full artifact set 
 | `--arch` | | Path to architecture constraints text file |
 | `--extensions` | | Extra file extensions to include, comma-separated (e.g. `.jsx,.tsx`) |
 | `--pre-scan` | | Run the automated OWASP pre-scan (Stage 0) on every file |
-| `--prescan-file` | | Load a manually-produced pre-scan JSON for single-file mode |
+| `--prescan-file` | | Load a manually-produced pre-scan JSON (single-file mode only) |
 
 ### Per-agent token floors
 
@@ -126,7 +246,7 @@ Even if `--max-tokens` is lower, each agent enforces a minimum generation budget
 | fix | 55,000 |
 | gate | 60,000 |
 
-If you see `Response truncated` errors on a specific agent, increase its floor in `scan_file.py` under `AGENT_MIN_TOKENS`.
+If you see `Response truncated` errors on a specific agent, increase its floor in `scan.py` under `AGENT_MIN_TOKENS`.
 
 ### Output structure
 
@@ -134,10 +254,10 @@ If you see `Response truncated` errors on a specific agent, increase its floor i
 scan_results/
   Auth.cs/
     scope.json              Scope agent output
-    threat_model.json       Threat model
+    threat.json             Threat model
     hypotheses.json         Vulnerability hypotheses
     evidence.json           Confirmed / Refuted / Inconclusive findings
-    fixes.json              Proposed fixes (NOT applied to codebase)
+    fix.json                Proposed fixes (NOT applied to codebase)
     gate.json               Gate decision + blockers + audit trail
     report.md               Human-readable summary
     _scope_raw.txt          Raw model output + finish_reason + elapsed time
@@ -162,7 +282,7 @@ scan_results/
 
 > **Important:** `PASS` means no blocking findings were detected in the code provided. It does **not** mean the code is secure. The pipeline only sees what it is given — missing context, non-diff files, runtime configuration, and infrastructure are outside its view.
 
-> **Fixes are proposals, not patches.** `fixes.json` contains recommended changes. Findings remain open until the code is actually changed and re-scanned.
+> **Fixes are proposals, not patches.** `fix.json` contains recommended changes. Findings remain open until the code is actually changed and re-scanned.
 
 ---
 
@@ -314,11 +434,13 @@ The hook looks for `agents_precommit.yaml` in the following locations (first mat
 
 ---
 
-## parse_findings.py — Results parser and report exporter
+## parse_findings.py — Results consolidator and report exporter
 
-Walks a directory of pipeline scan output folders, consolidates findings across all scan sets, and produces structured report files. Designed to run after `scan_file.py` has produced its output.
+Walks a directory of scan output folders (one subdirectory per scan set), consolidates findings from all five pipeline JSON files, and produces a single summary report and a Jira-importable CSV. Designed to run after `scan.py` has produced its output.
 
-### Expected input layout
+### How scan sets are discovered
+
+Each subdirectory that contains at least one recognised pipeline file is treated as a scan set. Files are matched by suffix — leading numeric timestamp prefixes (e.g. `1775963083761_evidence.json`) are stripped automatically.
 
 ```
 scan_results/
@@ -329,12 +451,20 @@ scan_results/
     pre_scan.json       → pre-scan findings (optional)
     scope.json          → scope metadata and risk signal
   Login_scan/
-    1234_evidence.json  → timestamp-prefixed filenames are handled automatically
+    1234_evidence.json  → timestamp-prefixed filenames handled automatically
     1234_fix.json
     ...
 ```
 
-All five file types are matched by suffix — leading numeric timestamp prefixes (e.g. `1775963083761_evidence.json`) are stripped automatically.
+### Data sources per finding
+
+| File | What is extracted |
+|---|---|
+| `evidence.json` | Finding key, title, severity, category, confidence, locations, code excerpts, trace |
+| `fix.json` | Minimal fix, better fix, required tests, logging guidance (joined by `finding_key`) |
+| `gate.json` | Blocker status, gate decision, required human review items |
+| `pre_scan.json` | Any pre-scan findings not already covered by evidence findings |
+| `scope.json` | Repo name, PR label, risk signal |
 
 ### CLI options
 
@@ -343,9 +473,7 @@ All five file types are matched by suffix — leading numeric timestamp prefixes
 | `root_dir` | *(required)* | Root directory containing scan subdirectories |
 | `--output-dir` | *(root_dir)* | Directory for output files |
 | `--summary-file` | `findings_summary.txt` | Human-readable consolidated report filename |
-| `--structured-csv-file` | `findings_structured.csv` | Structured findings CSV filename |
-| `--json` | | Also export findings as a JSON file |
-| `--json-file` | `findings_structured.json` | JSON output filename (only used with `--json`) |
+| `--csv-file` | `findings_jira.csv` | Jira-importable CSV filename |
 
 ### Usage examples
 
@@ -356,47 +484,68 @@ python parse_findings.py ./scan_results
 # Write reports to a separate directory
 python parse_findings.py ./scan_results --output-dir ./reports
 
-# Export CSV + JSON
-python parse_findings.py ./scan_results --output-dir ./reports --json
-
 # Custom filenames
 python parse_findings.py ./scan_results \
+    --output-dir ./reports \
     --summary-file security_report.txt \
-    --structured-csv-file findings.csv \
-    --json --json-file findings.json
+    --csv-file jira_tickets.csv
 ```
 
 ### Output files
 
 | File | Description |
 |---|---|
-| `findings_summary.txt` | Full human-readable report — gate decisions, severity breakdown, per-finding detail, required human review, follow-up actions |
-| `findings_structured.csv` | Structured CSV with one row per finding (expanded for multiple Notes values) |
-| `findings_structured.json` | Same data as CSV in JSON array format (opt-in via `--json`) |
+| `findings_summary.txt` | Full human-readable report — gate decisions per scan set, severity and category breakdowns, per-scan finding counts table, per-finding detail with code excerpts and fix proposals, required human review, and follow-up actions |
+| `findings_jira.csv` | Two-column CSV (`Summary`, `Description`) for Jira bulk import. Each row is globally unique — `Summary` is prefixed with `[scan_id][BLOCKER?][SEVERITY][CATEGORY]` so identical finding keys from different scan sets are distinguishable |
 
-### Structured CSV / JSON columns
+### findings_jira.csv Summary format
+
+```
+[scan_id][BLOCKER][HIGH][AuthN] FND-001 — Commented-out username/password validation logic
+[scan_id][MEDIUM][DataLeak] FND-002 — Unconditional Console.WriteLine leaks internal state
+```
+
+The `Description` field uses Jira wiki markup and includes: severity, category, rule ID, affected files and lines, description, remediation (minimal and better), required tests, logging guidance, required human review items, and follow-up actions.
+
+---
+
+## summary_to_csv.py — Detailed findings CSV exporter
+
+Reads a `findings_summary.txt` file produced by `parse_findings.py` and exports a flat CSV with one row per finding, expanding all fields individually. Useful for tracking in spreadsheets, importing into ticketing systems beyond Jira, or feeding into downstream tooling.
+
+### CLI options
+
+| Flag | Default | Description |
+|---|---|---|
+| `summary_file` | *(required)* | Path to `findings_summary.txt` |
+| `--output` / `-o` | `detailed_findings.csv` (next to input) | Output CSV path |
+
+### Usage examples
+
+```bash
+python summary_to_csv.py findings_summary.txt
+python summary_to_csv.py findings_summary.txt --output reports/detailed.csv
+python summary_to_csv.py reports/findings_summary.txt -o reports/detailed_findings.csv
+```
+
+### CSV columns
 
 | Column | Description |
 |---|---|
-| Scan ID | Name of the scan folder (e.g. `AddNewUser_scan`) |
-| Finding Key | Globally unique `CODESCAN-001`, `CODESCAN-002`, … assigned in order across all scan sets |
-| Is Blocker | `YES` or `NO` — whether the finding triggered a gate blocker |
-| Title | Short description of the finding |
-| Severity | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` |
-| Confidence | Model confidence as a percentage (e.g. `87%`) |
-| Category | Vulnerability category (e.g. `DataLeak`, `Injection`, `AuthN`) |
-| File(s) | Affected file path(s) with line ranges |
-| Line(s) | Line range(s) within the file |
-| Trace | Evidence trace — source to sink or auth flow |
-| Code Excerpt | Relevant code snippet (first excerpt, max 500 chars) |
-| Notes | Individual note from the fix recommendation (one row per note) |
-| Fix (minimal) | One-sentence summary of the minimal safe fix |
-| Fix (better) | One-sentence summary of the preferred fix |
-| Tests Needed | Required regression tests — test name and proof on separate lines |
+| `Finding ID` | Globally unique: `[scan_id]-[finding_key]` (e.g. `AddNewUser_scan-FND-001`) |
+| `Title` | Short description of the finding |
+| `Severity` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`, or `UNKNOWN` |
+| `Category` | Vulnerability category (e.g. `AuthN`, `DataLeak`, `BusinessLogic`) |
+| `File` | Affected file path(s) |
+| `Line(s)` | Affected line number(s) or range |
+| `Description` | Notes content from the fix recommendation (duplicate trace/excerpt content stripped) |
+| `Trace` | Execution / call trace from source to sink |
+| `Code Excerpt` | Verbatim code block from the finding (first excerpt only) |
+| `Fix (minimal)` | One-sentence summary of the minimal safe fix |
+| `Fix (better)` | One-sentence summary of the preferred enhanced fix |
+| `Tests Needed` | Required regression tests, pipe-separated (`test_name — proof \| test_name — proof`) |
 
-> **Row expansion:** When a finding has multiple Notes values, it produces one row per note with all other columns repeated. The `Finding Key` (e.g. `CODESCAN-001`) is the same across all expanded rows for the same finding.
-
-> **JSON format difference:** `Tests Needed` is a JSON array of strings in the JSON export rather than a line-separated string, making it easier to iterate in downstream tooling.
+A terminal preview is printed showing all findings in a compact table before the file is written.
 
 ---
 
@@ -420,28 +569,27 @@ Additional extensions from `agents.yaml → review.include_extensions` are merge
 
 ```yaml
 llm:
-  base_url: "http://localhost:1234/v1"
-  api_key: "local-lm-studio"          # value doesn't matter for LMStudio
-  temperature: 0                       # always 0 — reproducible output
-  max_tokens: 16000                    # upper ceiling; per-agent floors override upward
-  per_request_timeout: 600            # seconds before a single agent call times out
-  presence_penalty: 0.0               # set to 1.5 for Qwen3.5 / reasoning models
+  base_url: "http://localhost:1234/v1"   # overridden by --endpoint at runtime
+  api_key: "local-lm-studio"             # value doesn't matter for LMStudio
+  temperature: 0                         # always 0 — reproducible output
+  max_tokens: 16000                      # upper ceiling; per-agent floors override upward
+  per_request_timeout: 600              # seconds before a single agent call times out
+  presence_penalty: 0.0                 # set to 1.5 for Qwen3.5 / reasoning models
 
-shared_definitions:                   # severity levels, confidence rubric, OWASP crosswalk
+shared_definitions:                     # severity levels, confidence rubric, OWASP crosswalk
   ...
 
 review:
-  max_context_chars: 20000            # max file content chars sent to each agent
+  max_context_chars: 20000             # max file content chars sent to each agent
   include_extensions: [...]
 
 agents:
-  scope:           { system: ..., user_template: ... }
-  context_fetcher: { ... }
-  threat:          { ... }
-  hypotheses:      { ... }
-  evidence:        { ... }
-  fix:             { ... }
-  gate:            { ... }
+  scope:      { system: ..., user_template: ... }
+  threat:     { ... }
+  hypotheses: { ... }
+  evidence:   { ... }
+  fix:        { ... }
+  gate:       { ... }
 ```
 
 The gate policy lives inside `agents.gate.user_template` and can be overridden at runtime with `--policy path/to/policy.txt`. For more information on policy file format, see `gate_policy.md`.
@@ -452,7 +600,49 @@ The gate policy lives inside `agents.gate.user_template` and can be overridden a
 
 `lmstudio_system_prompt.txt` contains a system prompt for an initial OWASP sweep you can run directly in the LMStudio chat UI before invoking the pipeline. It produces a `pre_scan_json` blob (PRE-### findings) that feeds into the threat, hypotheses, evidence, and gate agents for deeper reconciliation.
 
-To use it manually: paste the contents into LMStudio's System Prompt field, send your code file as the user message, and save the JSON response. To automate it, pass `--pre-scan` to `scan_file.py` or provide a saved response with `--prescan-file`.
+To use it manually: paste the contents into LMStudio's System Prompt field, send your code file as the user message, and save the JSON response. To automate it, pass `--pre-scan` to `scan.py` or provide a saved response with `--prescan-file`.
+
+---
+
+## Security fixes
+
+The following vulnerabilities were identified by static analysis (Cortex / Qwen Coder Next review) and remediated in `scan.py`. All fixes are present in the current version.
+
+### CWE-573 — Lambda closure capture (`extract_json`)
+**Was:** Four `lambda` expressions in a list literal used as a transform pipeline, including a no-op `lambda x: x` that static analysers flag as a potential closure capture bug.  
+**Fixed:** Replaced with four named private functions (`_identity`, `_fix_ctrl`, `_repair`, `_fix_ctrl_repair`). Named functions are independently testable and unambiguous to analysis tools.
+
+### CWE-61 — Symlink traversal (`collect_files`)
+**Was:** `os.walk()` called without `followlinks=False`, allowing a symlink inside the scan tree to silently redirect traversal outside the intended root.  
+**Fixed:** `os.walk(root, followlinks=False)` is now used at all call sites.
+
+### CWE-22 — Path traversal (`safe_name` construction)
+**Was:** Output directory names were derived from relative file paths using only a `re.sub` that stripped some special characters but left `..` sequences intact. A file path like `../../etc/cron.d/file` would have written output outside `scan_results/`.  
+**Fixed:** Added explicit `..` collapse, null byte (`\x00`) stripping, leading dot/space trimming, a non-empty fallback, and a `validate_output_path()` function that resolves the full path and asserts it remains inside the output root via `Path.relative_to()`.
+
+### CWE-73 — External control of file path via agent label (`call_agent`, `scan_file`)
+**Was:** The `label` parameter was used directly in `f"_{label}_FAILED.txt"` and `f"_{name}.json"` path constructions with no validation.  
+**Fixed:** `sanitise_label()` enforces an explicit allowlist (`_ALLOWED_AGENT_LABELS`) at the entry point of `call_agent` and inside `scan_file`'s inner `agent()` helper. Any value outside the allowlist raises `ValueError` before reaching the filesystem.
+
+### CWE-532 — Credential exposure in logs (endpoint display)
+**Was:** `args.endpoint` was printed verbatim in the startup banner and backend selection log line. A URL containing embedded credentials (e.g. `https://key:secret@api.host/v1`) would expose them to the terminal and any log aggregator.  
+**Fixed:** `redact_url_credentials()` strips the userinfo component from any URL before display, replacing it with `***`.
+
+### CWE-918 — SSRF via non-HTTP endpoint scheme (`build_backend`)
+**Was:** No validation prevented `file://`, `ftp://`, or custom URI schemes from being passed as `--endpoint`, which could probe local filesystem paths or internal services through the HTTP client.  
+**Fixed:** `validate_endpoint_url()` rejects any scheme outside `{http, https}` and verifies a hostname is present before the value reaches any backend constructor.
+
+### CWE-400 — Resource exhaustion via oversized scan targets (`collect_files`)
+**Was:** Files were read with `read_text()` regardless of size. An unexpectedly large file (e.g. a binary mistakenly matched by extension) could exhaust available memory.  
+**Fixed:** `collect_files()` now calls `stat()` during collection and skips any file exceeding `_MAX_FILE_READ_BYTES` (16 MB) with a warning. The same limit is applied to all auxiliary input files (policy, patterns, arch, prescan, config).
+
+### CWE-377 / TOCTOU race — Non-atomic file writes (all output paths)
+**Was:** All output files were written with `Path.write_text()`. A process crash mid-write left a truncated or empty JSON file that subsequent runs could silently read as valid data. In concurrent use, a window existed between `mkdir()` and `write_text()` where another process could replace the directory with a symlink.  
+**Fixed:** All seven output write sites now use `atomic_write_text()`, which writes to a sibling `.tmp` file via `tempfile.mkstemp()` (mode 0600, unpredictable name) then calls `os.replace()` — a POSIX atomic rename — to move it into place. The temp file is cleaned up on any write error.
+
+### CWE-20 — Missing input validation on config and auxiliary files (`main`)
+**Was:** `agents.yaml` and auxiliary text files (policy, patterns, arch, prescan) were read with bare `Path.read_text()` or broad `except Exception` catches, with no size limit and no validation that the YAML parsed as a mapping.  
+**Fixed:** All file reads go through size-checked helpers. `yaml.YAMLError` and `json.JSONDecodeError` are caught specifically. The YAML config is validated as a `dict` after parsing. The prescan file is validated as a `dict` before use.
 
 ---
 
@@ -461,14 +651,14 @@ To use it manually: paste the contents into LMStudio's System Prompt field, send
 **`TIMEOUT after Ns` on an agent**
 - LMStudio GPU Offload is 0 — all inference is on CPU. Set GPU Offload to 99.
 - Context Length is too high (e.g. 32768) — KV cache pre-allocation is slow even on GPU. Set to 8192.
-- The agent's token floor is too high for your hardware. Reduce `AGENT_MIN_TOKENS` for that agent in `scan_file.py`.
+- The agent's token floor is too high for your hardware. Reduce `AGENT_MIN_TOKENS` for that agent in `scan.py`.
 
 **`Response truncated (finish_reason='length')`**
 - The model hit its generation limit mid-JSON. Increase the agent's floor in `AGENT_MIN_TOKENS`.
 - Confirm LMStudio Server → Max Generated Tokens is set to `-1`.
 
 **`scope failed: ValueError` with trailing `}` or fences**
-- The model wrapped its JSON in markdown fences. This is handled automatically. If you still see this, you may be running an older version of `scan_file.py`.
+- The model wrapped its JSON in markdown fences. This is handled automatically. If you still see this, you may be running an older version of `scan.py`.
 
 **Agent produces `{}` / `_FAILED.txt` written**
 - Check `_<agent>_FAILED.txt` for the exact error and last raw output.
@@ -490,6 +680,15 @@ To use it manually: paste the contents into LMStudio's System Prompt field, send
 **`parse_findings.py` reports no scan sets found**
 - Ensure the directory contains subdirectories with at least one recognised file (`evidence.json`, `fix.json`, `gate.json`, `pre_scan.json`, or `scope.json`).
 - Timestamp-prefixed filenames (e.g. `1234_evidence.json`) are handled automatically.
+
+**Cloud provider authentication errors**
+- OpenAI / Anthropic / Gemini: confirm the API key is correct and exported in the environment variable, or passed explicitly with `--api-key`.
+- Azure: `--endpoint` is required and must be the full resource endpoint (e.g. `https://my-resource.openai.azure.com`).
+- Bedrock: run `aws sts get-caller-identity` to confirm credentials are valid in the target region. If using a named profile, pass `--aws-profile`.
+- All providers: endpoints must use `http://` or `https://` — other schemes are rejected for security reasons.
+
+**`validate_output_path: path traversal detected`**
+- A filename in the scan tree contains `..` sequences that would escape the output directory. The file is skipped automatically with an error entry in the results. Check the file path for unexpected characters.
 
 ---
 
