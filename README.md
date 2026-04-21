@@ -23,6 +23,20 @@ The pipeline scans a directory of source files, runs each file through a chain o
 
 Every provider also accepts `--endpoint` to override the default API URL, and `--model` to select a specific model. See [scan.py — full pipeline orchestrator](#scanpy--full-pipeline-orchestrator) for the complete flag reference.
 
+If you run into token limit issues in different APIs, modify the default AGENT_MIN_TOKENS values in the scan.py file to work within those limits. Sizes are appropriate for local models out of the box.
+
+e.g. for Open AI GPT 4o:
+
+AGENT_MIN_TOKENS = {
+    "pre_scan":   4000,
+    "scope":      6000,
+    "threat":     6000,
+    "hypotheses": 8000,
+    "evidence":   12000,
+    "fix":        12000,
+    "gate":       12000,
+}
+
 ### New companion scripts
 
 | Script | Purpose |
