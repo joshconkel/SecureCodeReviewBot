@@ -1,6 +1,6 @@
-# precommit-scan — Local developer pre-commit hook
+# precommit-scan - Local developer pre-commit hook
 
-`precommit_scan.py` is a single-agent scanner that runs on staged files at commit time. **Always exits 0 — warn-only.** The commit proceeds regardless of findings.
+`precommit_scan.py` is a single-agent scanner that runs on staged files at commit time. **Always exits 0 - warn-only.** The commit proceeds regardless of findings.
 
 ## Files
 
@@ -54,7 +54,7 @@ chmod +x .git/hooks/pre-commit
 ## Usage examples
 
 ```bash
-# Scan staged files (default — what runs automatically on git commit)
+# Scan staged files (default - what runs automatically on git commit)
 python precommit_scan.py
 
 # Scan specific files manually
@@ -100,7 +100,7 @@ The hook looks for `agents_precommit.yaml` in the following locations (first mat
 ## Troubleshooting
 
 **Pre-commit hook is too slow**
-- Switch to `Qwen2.5-Coder-7B` if running a larger model — ~10–20s per file vs 40s+.
+- Switch to `Qwen2.5-Coder-7B` if running a larger model - ~10–20s per file vs 40s+.
 - Reduce `max_chars_per_file` in `agents_precommit.yaml` (default: 8000).
 - Add `--skip-if-offline` so the hook is silent when LMStudio isn't loaded.
 

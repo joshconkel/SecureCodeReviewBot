@@ -24,7 +24,7 @@ The pipeline scans a directory of source files, runs each file through a chain o
 [Policy Gate]         →  PASS / NEEDS_HUMAN / FAIL decision
 ```
 
-Each agent receives only the data it needs — the pipeline deliberately slims payloads between stages to stay within model context windows. All inter-agent data is written to disk as JSON so you can inspect, replay, or extend any stage independently.
+Each agent receives only the data it needs - the pipeline deliberately slims payloads between stages to stay within model context windows. All inter-agent data is written to disk as JSON so you can inspect, replay, or extend any stage independently.
 
 ![Agent Pipeline](Agent_Pipeline.png)
 
@@ -74,14 +74,14 @@ pip install google-generativeai # --gemini
 | Max Generated Tokens | `-1` | Let per-request `max_tokens` control output length |
 | Flash Attention | On | Reduces KV cache memory ~30% |
 
-> **GPU note:** On an 8 GB VRAM card (RTX 3070 Ti / 4060 Ti), Qwen2.5-Coder-7B Q4_K_M uses ~4.1 GB for weights + ~0.8 GB KV cache at 8192 context ≈ ~5 GB total, leaving comfortable headroom. Do not run a 14B model on 8 GB — it will split layers to CPU and become unusably slow.
+> **GPU note:** On an 8 GB VRAM card (RTX 3070 Ti / 4060 Ti), Qwen2.5-Coder-7B Q4_K_M uses ~4.1 GB for weights + ~0.8 GB KV cache at 8192 context ≈ ~5 GB total, leaving comfortable headroom. Do not run a 14B model on 8 GB - it will split layers to CPU and become unusably slow.
 
 ---
 
 ## Quick start
 
 ```bash
-# LM Studio (default — no extra flags needed)
+# LM Studio (default - no extra flags needed)
 python scanner/scan.py /path/to/code
 
 # OpenAI
@@ -127,7 +127,7 @@ Additional extensions from `scanner/agents.yaml → review.include_extensions` a
 
 ### Multi-provider LLM backend support (`scan.py`)
 
-`scan.py` now supports six LLM backends selectable at runtime via a single CLI flag. LM Studio remains the default — no flags required for existing workflows.
+`scan.py` now supports six LLM backends selectable at runtime via a single CLI flag. LM Studio remains the default - no flags required for existing workflows.
 
 | Provider | Flag | Auth |
 |---|---|---|
