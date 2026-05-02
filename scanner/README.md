@@ -1,4 +1,4 @@
-# scanner — Full pipeline orchestrator
+# scanner - Full pipeline orchestrator
 
 `scan.py` runs each source file through all seven pipeline stages and writes a full artifact set per file. It supports six LLM backends selectable at runtime.
 
@@ -22,8 +22,8 @@
 
 | File | Description |
 |---|---|
-| `scan.py` | Main orchestrator — runs the full 7-stage pipeline over a directory |
-| `agents.yaml` | Full pipeline configuration — agent prompts, schemas, gate policy |
+| `scan.py` | Main orchestrator - runs the full 7-stage pipeline over a directory |
+| `agents.yaml` | Full pipeline configuration - agent prompts, schemas, gate policy |
 | `lmstudio_system_prompt.txt` | System prompt for the optional LMStudio pre-scan stage (Stage 0) |
 
 ---
@@ -101,7 +101,7 @@ Exactly one provider flag may be used per invocation. If none is given, `--lmstu
 | `--out` | `scan_results` | Output directory for all artifacts |
 | `--max-files` | `50` | Max files to scan (0 = unlimited) |
 | `--max-chars` | `16000` | Max characters of file content sent per agent call |
-| `--max-tokens` | `3000` | Base generation budget (per-agent floors apply — see below) |
+| `--max-tokens` | `3000` | Base generation budget (per-agent floors apply - see below) |
 | `--retries` | `2` | Retry attempts per agent on JSON parse failure |
 | `--policy` | | Path to a custom gate policy text file |
 | `--patterns` | | Path to org coding standards / patterns text file |
@@ -146,7 +146,7 @@ AGENT_MIN_TOKENS = {
 
 ```bash
 # ===========================================================================
-# LM Studio (default — no provider flag needed)
+# LM Studio (default - no provider flag needed)
 # ===========================================================================
 
 # Scan an entire directory
@@ -178,7 +178,7 @@ python scan.py /path/to/code \
 # OpenAI
 # ===========================================================================
 
-# Basic — API key via flag
+# Basic - API key via flag
 python scan.py /path/to/code \
     --openai \
     --api-key sk-...
@@ -257,7 +257,7 @@ python scan.py /path/to/code \
 # Azure AI Foundry
 # ===========================================================================
 
-# Basic — endpoint is required
+# Basic - endpoint is required
 python scan.py /path/to/code \
     --azure \
     --endpoint https://my-resource.openai.azure.com \
@@ -298,7 +298,7 @@ export GEMINI_API_KEY=AIza...
 python scan.py /path/to/code --gemini
 
 # ===========================================================================
-# Common options — work with any provider
+# Common options - work with any provider
 # ===========================================================================
 
 # Scan only the first 10 files (useful for testing a new provider config)
@@ -356,7 +356,7 @@ scan_results/
     _evidence_raw.txt
     _fix_raw.txt
     _gate_raw.txt
-    _<agent>_FAILED.txt     Written only on failure — contains error + last raw output
+    _<agent>_FAILED.txt     Written only on failure - contains error + last raw output
   _merged/
     summary.json            Rollup of all file decisions
     report.md               Combined report across all scanned files
@@ -372,7 +372,7 @@ scan_results/
 | `NEEDS_HUMAN` | Inconclusive high-severity finding, or confirmed High finding with borderline confidence |
 | `FAIL` | Confirmed Critical finding (conf ≥ 0.7), confirmed AuthN/AuthZ High (conf ≥ 0.8), or any confirmed Critical/High finding with no proposed fix |
 
-> **Important:** `PASS` means no blocking findings were detected in the code provided. It does **not** mean the code is secure. The pipeline only sees what it is given — missing context, non-diff files, runtime configuration, and infrastructure are outside its view.
+> **Important:** `PASS` means no blocking findings were detected in the code provided. It does **not** mean the code is secure. The pipeline only sees what it is given - missing context, non-diff files, runtime configuration, and infrastructure are outside its view.
 
 > **Fixes are proposals, not patches.** `fix.json` contains recommended changes. Findings remain open until the code is actually changed and re-scanned.
 
@@ -384,7 +384,7 @@ scan_results/
 llm:
   base_url: "http://localhost:1234/v1"   # overridden by --endpoint at runtime
   api_key: "local-lm-studio"             # value doesn't matter for LMStudio
-  temperature: 0                         # always 0 — reproducible output
+  temperature: 0                         # always 0 - reproducible output
   max_tokens: 16000                      # upper ceiling; per-agent floors override upward
   per_request_timeout: 600              # seconds before a single agent call times out
   presence_penalty: 0.0                 # set to 1.5 for Qwen3.5 / reasoning models
@@ -421,39 +421,39 @@ To use it manually: paste the contents into LMStudio's System Prompt field, send
 
 The following vulnerabilities were identified by static analysis (Cortex / Qwen Coder Next review) and remediated in `scan.py`. All fixes are present in the current version.
 
-### CWE-573 — Lambda closure capture (`extract_json`)
+### CWE-573 - Lambda closure capture (`extract_json`)
 **Was:** Four `lambda` expressions in a list literal used as a transform pipeline, including a no-op `lambda x: x` that static analysers flag as a potential closure capture bug.
 **Fixed:** Replaced with four named private functions (`_identity`, `_fix_ctrl`, `_repair`, `_fix_ctrl_repair`). Named functions are independently testable and unambiguous to analysis tools.
 
-### CWE-61 — Symlink traversal (`collect_files`)
+### CWE-61 - Symlink traversal (`collect_files`)
 **Was:** `os.walk()` called without `followlinks=False`, allowing a symlink inside the scan tree to silently redirect traversal outside the intended root.
 **Fixed:** `os.walk(root, followlinks=False)` is now used at all call sites.
 
-### CWE-22 — Path traversal (`safe_name` construction)
+### CWE-22 - Path traversal (`safe_name` construction)
 **Was:** Output directory names were derived from relative file paths using only a `re.sub` that stripped some special characters but left `..` sequences intact. A file path like `../../etc/cron.d/file` would have written output outside `scan_results/`.
 **Fixed:** Added explicit `..` collapse, null byte (`\x00`) stripping, leading dot/space trimming, a non-empty fallback, and a `validate_output_path()` function that resolves the full path and asserts it remains inside the output root via `Path.relative_to()`.
 
-### CWE-73 — External control of file path via agent label (`call_agent`, `scan_file`)
+### CWE-73 - External control of file path via agent label (`call_agent`, `scan_file`)
 **Was:** The `label` parameter was used directly in `f"_{label}_FAILED.txt"` and `f"_{name}.json"` path constructions with no validation.
 **Fixed:** `sanitise_label()` enforces an explicit allowlist (`_ALLOWED_AGENT_LABELS`) at the entry point of `call_agent` and inside `scan_file`'s inner `agent()` helper. Any value outside the allowlist raises `ValueError` before reaching the filesystem.
 
-### CWE-532 — Credential exposure in logs (endpoint display)
+### CWE-532 - Credential exposure in logs (endpoint display)
 **Was:** `args.endpoint` was printed verbatim in the startup banner and backend selection log line. A URL containing embedded credentials (e.g. `https://key:secret@api.host/v1`) would expose them to the terminal and any log aggregator.
 **Fixed:** `redact_url_credentials()` strips the userinfo component from any URL before display, replacing it with `***`.
 
-### CWE-918 — SSRF via non-HTTP endpoint scheme (`build_backend`)
+### CWE-918 - SSRF via non-HTTP endpoint scheme (`build_backend`)
 **Was:** No validation prevented `file://`, `ftp://`, or custom URI schemes from being passed as `--endpoint`, which could probe local filesystem paths or internal services through the HTTP client.
 **Fixed:** `validate_endpoint_url()` rejects any scheme outside `{http, https}` and verifies a hostname is present before the value reaches any backend constructor.
 
-### CWE-400 — Resource exhaustion via oversized scan targets (`collect_files`)
+### CWE-400 - Resource exhaustion via oversized scan targets (`collect_files`)
 **Was:** Files were read with `read_text()` regardless of size. An unexpectedly large file (e.g. a binary mistakenly matched by extension) could exhaust available memory.
 **Fixed:** `collect_files()` now calls `stat()` during collection and skips any file exceeding `_MAX_FILE_READ_BYTES` (16 MB) with a warning. The same limit is applied to all auxiliary input files (policy, patterns, arch, prescan, config).
 
-### CWE-377 / TOCTOU race — Non-atomic file writes (all output paths)
+### CWE-377 / TOCTOU race - Non-atomic file writes (all output paths)
 **Was:** All output files were written with `Path.write_text()`. A process crash mid-write left a truncated or empty JSON file that subsequent runs could silently read as valid data. In concurrent use, a window existed between `mkdir()` and `write_text()` where another process could replace the directory with a symlink.
-**Fixed:** All seven output write sites now use `atomic_write_text()`, which writes to a sibling `.tmp` file via `tempfile.mkstemp()` (mode 0600, unpredictable name) then calls `os.replace()` — a POSIX atomic rename — to move it into place. The temp file is cleaned up on any write error.
+**Fixed:** All seven output write sites now use `atomic_write_text()`, which writes to a sibling `.tmp` file via `tempfile.mkstemp()` (mode 0600, unpredictable name) then calls `os.replace()` - a POSIX atomic rename - to move it into place. The temp file is cleaned up on any write error.
 
-### CWE-20 — Missing input validation on config and auxiliary files (`main`)
+### CWE-20 - Missing input validation on config and auxiliary files (`main`)
 **Was:** `agents.yaml` and auxiliary text files (policy, patterns, arch, prescan) were read with bare `Path.read_text()` or broad `except Exception` catches, with no size limit and no validation that the YAML parsed as a mapping.
 **Fixed:** All file reads go through size-checked helpers. `yaml.YAMLError` and `json.JSONDecodeError` are caught specifically. The YAML config is validated as a `dict` after parsing. The prescan file is validated as a `dict` before use.
 
@@ -462,8 +462,8 @@ The following vulnerabilities were identified by static analysis (Cortex / Qwen 
 ## Troubleshooting
 
 **`TIMEOUT after Ns` on an agent**
-- LMStudio GPU Offload is 0 — all inference is on CPU. Set GPU Offload to 99.
-- Context Length is too high (e.g. 32768) — KV cache pre-allocation is slow even on GPU. Set to 8192.
+- LMStudio GPU Offload is 0 - all inference is on CPU. Set GPU Offload to 99.
+- Context Length is too high (e.g. 32768) - KV cache pre-allocation is slow even on GPU. Set to 8192.
 - The agent's token floor is too high for your hardware. Reduce `AGENT_MIN_TOKENS` for that agent in `scan.py`.
 
 **`Response truncated (finish_reason='length')`**
@@ -478,7 +478,7 @@ The following vulnerabilities were identified by static analysis (Cortex / Qwen 
 - JSON parse failures retry automatically with a correction nudge. Timeouts and connection errors do not retry.
 
 **Everything is slow (200+ seconds per agent)**
-- GPU Offload is 0 — see above.
+- GPU Offload is 0 - see above.
 - You may be running a model larger than your VRAM can fit. Qwen2.5-Coder-7B Q4_K_M is the recommended starting point for 8 GB VRAM.
 
 **Reasoning model producing only `<think>` blocks with no JSON**
@@ -489,7 +489,7 @@ The following vulnerabilities were identified by static analysis (Cortex / Qwen 
 - OpenAI / Anthropic / Gemini: confirm the API key is correct and exported in the environment variable, or passed explicitly with `--api-key`.
 - Azure: `--endpoint` is required and must be the full resource endpoint (e.g. `https://my-resource.openai.azure.com`).
 - Bedrock: run `aws sts get-caller-identity` to confirm credentials are valid in the target region. If using a named profile, pass `--aws-profile`.
-- All providers: endpoints must use `http://` or `https://` — other schemes are rejected for security reasons.
+- All providers: endpoints must use `http://` or `https://` - other schemes are rejected for security reasons.
 
 **`validate_output_path: path traversal detected`**
 - A filename in the scan tree contains `..` sequences that would escape the output directory. The file is skipped automatically with an error entry in the results. Check the file path for unexpected characters.

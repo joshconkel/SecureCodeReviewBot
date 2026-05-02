@@ -1,4 +1,4 @@
-# quick-scan — Fast CI/CD pipeline scanner
+# quick-scan - Fast CI/CD pipeline scanner
 
 `quick_scan.py` is a single-agent, single LLM call per file scanner designed to run in CI pipelines (Azure DevOps, GitHub Actions) as a PR gate. It scans only changed files from a git diff.
 
@@ -15,10 +15,10 @@
 
 | Code | Meaning |
 |---|---|
-| `0` | PASS — no significant findings |
-| `1` | WARN — findings present but below fail threshold |
-| `2` | FAIL — Critical/High findings above confidence threshold |
-| `3` | ERROR — scanner error (treat as WARN to avoid false blocks) |
+| `0` | PASS - no significant findings |
+| `1` | WARN - findings present but below fail threshold |
+| `2` | FAIL - Critical/High findings above confidence threshold |
+| `3` | ERROR - scanner error (treat as WARN to avoid false blocks) |
 
 ---
 
@@ -34,7 +34,7 @@
 | `--max-files` | `50` | Max files in directory mode |
 | `--no-ado` | | Suppress Azure DevOps `##vso` log commands |
 | `--gha` | | Emit GitHub Actions annotations instead of ADO commands |
-| `--warn-only` | | Never exit with code 2 — useful for initial rollout |
+| `--warn-only` | | Never exit with code 2 - useful for initial rollout |
 
 ---
 
@@ -52,7 +52,7 @@ python quick_scan.py $(Build.SourcesDirectory) \
 # Override model
 python quick_scan.py src/ --model gpt-4o-mini
 
-# Rollout mode — warn but never block PRs
+# Rollout mode - warn but never block PRs
 python quick_scan.py src/ --warn-only
 ```
 
