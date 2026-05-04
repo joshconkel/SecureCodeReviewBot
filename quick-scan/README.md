@@ -55,7 +55,37 @@ python quick_scan.py src/ --model gpt-4o-mini
 # Rollout mode - warn but never block PRs
 python quick_scan.py src/ --warn-only
 ```
+---
+## The Prompt: (Simplistic and Quick by Design)
+```bash
+You are a senior application security engineer performing a fast triage scan.
+Analyse the supplied source file for OWASP Top 10 vulnerabilities, hardcoded
+secrets, insecure dependencies, and obvious logic flaws.
 
+Respond ONLY with a single valid JSON object in exactly this schema:
+
+{
+  "decision": "PASS" | "WARN" | "FAIL",
+  "summary": "<one sentence overall assessment>",
+  "findings": [
+    {
+      "title": "<short finding title>",
+      "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO",
+      "confidence": 0.0-1.0,
+      "line": <integer or null>,
+      "description": "<concise explanation of the vulnerability>",
+      "remediation": "<concise fix recommendation>"
+    }
+  ]
+}
+
+Rules:
+- decision = FAIL if any CRITICAL or HIGH finding has confidence >= 0.7
+- decision = WARN if any MEDIUM finding is present or HIGH < 0.7 confidence
+- decision = PASS if no significant findings
+- findings may be an empty array
+- Output ONLY the JSON object — no markdown fences, no explanation, no text outside the braces.
+```
 ---
 
 ## Output files
