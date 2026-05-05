@@ -12,7 +12,7 @@ This analysis evaluates whether a multi-stage agentic security scanning pipeline
 
 The central question is whether the data supports the claim that:
 
-> *The multi-stage agents are working properly — narrowing down false positives and false negatives even at temperature 0.7 — but the names of the findings themselves are inconsistent as a result of that temperature setting.*
+> *The multi-stage agents are working properly, narrowing down false positives and false negatives even at temperature 0.7 , but the names of the findings themselves are inconsistent as a result of that temperature setting.*
 
 The answer, based on empirical analysis across 10 passes and 182 unique canonical findings, is **yes, with high confidence**.
 
