@@ -35,6 +35,50 @@ The answer, based on empirical analysis across 10 passes and 182 unique canonica
 
 ---
 
+## Statistical significance
+
+Six tests were run to evaluate whether the data supports the claim with statistical rigour. The short answer is **yes for the core claim** (pipeline verdicts are reliable far above chance), **yes with a caveat for the distinction** between outcome stability and title stability (the gap is real but smaller than the qualitative picture suggests), and **no for per-finding Bonferroni-corrected tests** — not because the effect is absent but because 10 passes is structurally underpowered for that test.
+
+### Test results
+
+| # | Test | Statistic | p-value | Effect size | Verdict |
+|---|------|-----------|---------|-------------|---------|
+| T1 | One-sample t-test: outcome agreement vs. chance (μ = 0.5) | t = 37.49 | 3.0 × 10⁻⁸⁷ | d = 2.78 (very large) | **Supported** |
+| T2 | One-sample t-test: title agreement vs. chance (μ = 0.5) | t = 30.03 | 3.2 × 10⁻⁷² | d = 2.23 (very large) | Supported |
+| T3 | Wilcoxon signed-rank: outcome agreement > title agreement | W = 572 | 0.030 | — | **Supported** |
+| T4 | Paired t-test: mean difference (outcome − title agreement) | t = 2.55 | 0.012 | d = 0.19 (small) | **Supported** |
+| T5 | Two-proportion z-test: perfect outcome agreement > perfect title agreement | z = 2.01 | 0.022 | — | **Supported** |
+| T6 | Per-finding binomial test, Bonferroni-corrected (n = 144 ten-pass findings) | — | — | — | **Underpowered** |
+
+### Interpreting the results
+
+**T1 confirms the core claim decisively.** The mean outcome agreement across 182 findings is 93.6%, against a chance baseline of 50%. The p-value of 3 × 10⁻⁸⁷ is not a rounding artifact — this is an enormous, unambiguous signal. Cohen's d of 2.78 is nearly four times what is conventionally considered a "large" effect (d > 0.8). The pipeline's confirmed/inconclusive verdict is not random noise at temperature 0.7; it is a stable, reliable signal.
+
+**T2 shows titles are also above chance** (mean agreement 90.2%, d = 2.23), which means the instability in naming is relative, not absolute. Temperature 0.7 does not make titles random — it makes them *less deterministic than the structural verdict*, which is what T3 and T4 measure.
+
+**T3 and T4 confirm that outcome agreement is significantly higher than title agreement** (p = 0.012–0.030). This directly supports the argument that the two-stage pipeline is doing something structurally different for the verdict versus the label. However, the effect size of the *gap* is small (d = 0.19). The honest reading is that outcome and title consistency both run high, and the pipeline's structural advantage over pure naming shows up reliably but modestly in the aggregate numbers. The 30 evidence-level inconsistency groups identified in the previous section — where the same file and lines produce different severity ratings — are the sharper empirical illustration of where temperature 0.7 leaves its mark.
+
+**T5 reinforces T3/T4** at the "perfect agreement" threshold: 85.2% of findings are confirmed or rejected unanimously across all passes, versus 76.9% for titles — a gap of 8.3 percentage points (p = 0.022).
+
+**T6 fails after Bonferroni correction, but this is a study design limitation, not a refutation.** With 10 passes per finding and 144 findings, the Bonferroni-adjusted threshold is α = 0.000347. The minimum achievable p-value for a single finding with n = 10 is 0.5¹⁰ = 0.000977 — physically impossible to clear the corrected threshold even with perfect unanimity. Approximately 12 passes would be the minimum needed for a perfect-agreement finding to survive Bonferroni correction. 138 of 144 findings (95.8%) are individually significant at the uncorrected α = 0.05, and the median per-finding p-value is 9.8 × 10⁻⁴, which is close to the Bonferroni bar. The failure is arithmetic, not evidential.
+
+### Descriptive statistics
+
+| Measure | Outcome agreement | Title agreement |
+|---------|:-----------------:|:---------------:|
+| Mean | 0.936 | 0.902 |
+| Median | 1.000 | 1.000 |
+| Std dev | 0.157 | 0.181 |
+| Perfect (100%) | 85.2% of findings | 76.9% of findings |
+
+The identical medians (both 1.000) reflect that the majority of findings are unanimous on both dimensions. The mean is pulled down by the minority of findings with split verdicts or title variation — but those minorities differ in size (14.8% for outcomes, 23.1% for titles), and that difference is what T3–T5 are detecting.
+
+### Conclusion
+
+The data supports the argument with statistical significance at conventional thresholds (α = 0.05) across four independent tests. The pipeline verdict is reliable at temperature 0.7 with an extremely large effect size. The distinction between verdict stability and title stability is real and statistically detectable, though the effect size of the gap is small — the practical evidence for temperature-induced naming noise is better illustrated by the 30 same-location evidence inconsistencies (18 of which also vary in severity) than by the aggregate agreement gap alone.
+
+---
+
 ## What the Data Shows
 
 ### 1. The confirmation stage is working as a filter
